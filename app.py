@@ -1,636 +1,537 @@
 
 import streamlit as st
-import io
 import re
+import io
 from collections import Counter
 from pypdf import PdfReader
 
-# =====================================
-# PAGE CONFIGURATION
-# =====================================
+# ---------------- PAGE CONFIGURATION ----------------
 
 st.set_page_config(
     page_title="DocuGenius AI",
-    page_icon="📚",
+    page_icon="📘",
     layout="wide"
 )
 
-# =====================================
-# PURPLE AND DARK BLUE THEME
-# =====================================
+# ---------------- CUSTOM CSS ----------------
 
 st.markdown("""
 <style>
-
 .stApp {
-    background: linear-gradient(135deg, #10172F, #172554, #241447);
+    background: linear-gradient(135deg, #090B25, #171044, #25145A);
     color: white;
 }
 
-.stApp h1, .stApp h2, .stApp h3,
-.stApp h4, .stApp p, .stApp label,
-.stApp li {
-    color: white !important;
-}
-
 [data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #3B0764, #172554);
+    background: #160D38;
 }
 
-[data-testid="stSidebar"] * {
+h1, h2, h3, p, label {
     color: white !important;
-}
-
-.title {
-    text-align: center;
-    color: #C4B5FD !important;
-    font-size: 44px;
-    font-weight: 800;
-}
-
-.subtitle {
-    text-align: center;
-    color: #BFDBFE !important;
-    font-size: 19px;
 }
 
 .card {
-    background: linear-gradient(135deg, #31245D, #1E3260);
-    padding: 25px;
-    border-radius: 16px;
-    border: 1px solid #8064D6;
-    box-shadow: 0 5px 18px rgba(0,0,0,0.3);
+    background: #25184F;
+    padding: 22px;
+    border-radius: 15px;
+    border: 1px solid #6545B5;
     margin-bottom: 15px;
 }
 
-.card h3 {
-    color: #C4B5FD !important;
-}
-
-.card p {
-    color: white !important;
-}
-
-.stButton > button,
-.stFormSubmitButton > button {
-    background: linear-gradient(90deg, #7C3AED, #2563EB);
-    color: white !important;
+.stButton > button {
+    background: linear-gradient(90deg, #7139D5, #3158C9);
+    color: white;
     border: none;
-    border-radius: 10px;
-    font-weight: bold;
+    border-radius: 9px;
+    padding: 10px 20px;
 }
 
-.stTextInput input,
-.stTextArea textarea {
-    background-color: white !important;
-    color: #111827 !important;
-    border: 2px solid #8B5CF6 !important;
-    border-radius: 8px;
+.stButton > button:hover {
+    background: #8B5CF6;
+    color: white;
 }
 
-[data-testid="stFileUploader"] {
-    background: #26345C;
-    border: 1px solid #8064D6;
-    border-radius: 12px;
-    padding: 12px;
+[data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea {
+    background-color: white;
+    color: black;
 }
 
-[data-testid="stMetric"] {
-    background: #292653;
+.answer-box {
+    background: #201747;
+    border-left: 5px solid #9B70FF;
     padding: 18px;
-    border-radius: 12px;
-    border: 1px solid #8064D6;
+    border-radius: 10px;
+    color: white;
+    margin-top: 12px;
 }
-
-[data-testid="stMetricValue"],
-[data-testid="stMetricLabel"] {
-    color: white !important;
-}
-
-hr {
-    border-color: #6D5BA6;
-}
-
 </style>
 """, unsafe_allow_html=True)
 
 
-# =====================================
-# SESSION STATE
-# =====================================
+# ---------------- SESSION STATE ----------------
 
-defaults = {
-    "document_text": "",
-    "document_name": "",
-    "page_count": 0,
-    "chat_history": [],
-    "summary": "",
-    "file_signature": None
-}
+if "pdf_text" not in st.session_state:
+    st.session_state.pdf_text = ""
 
-for key, value in defaults.items():
-    if key not in st.session_state:
-        st.session_state[key] = value
+if "file_name" not in st.session_state:
+    st.session_state.file_name = ""
+
+if "history" not in st.session_state:
+    st.session_state.history = []
 
 
-# =====================================
-# TEXT PROCESSING
-# =====================================
+# ---------------- PDF TEXT EXTRACTION ----------------
 
-STOPWORDS = {
-    "the", "is", "a", "an", "and", "or", "of", "to",
-    "in", "on", "for", "with", "what", "which", "who",
-    "when", "where", "why", "how", "are", "was", "were",
-    "be", "been", "being", "this", "that", "these",
-    "those", "it", "its", "as", "at", "by", "from",
-    "do", "does", "did", "can", "could", "would",
-    "should", "about", "explain", "tell", "me"
+def extract_pdf_text(uploaded_file):
+    try:
+        pdf_bytes = uploaded_file.getvalue()
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+
+        text = ""
+
+        for page_number, page in enumerate(reader.pages):
+            page_text = page.extract_text()
+
+            if page_text:
+                text += page_text + "\n"
+
+        return text.strip()
+
+    except Exception as e:
+        st.error(f"PDF reading error: {e}")
+        return ""
+
+
+# ---------------- TEXT PROCESSING ----------------
+
+STOP_WORDS = {
+    "what", "is", "are", "the", "a", "an", "of",
+    "in", "on", "and", "to", "for", "how", "does",
+    "do", "explain", "define", "tell", "me", "about",
+    "can", "you", "give", "describe", "with", "from",
+    "this", "that", "it", "its", "which", "who"
 }
 
 
 def tokenize(text):
-    words = re.findall(r'\b[a-zA-Z0-9]+\b', text.lower())
-    return [word for word in words if word not in STOPWORDS]
+    words = re.findall(r"[a-zA-Z0-9]+", text.lower())
+
+    return [
+        word for word in words
+        if word not in STOP_WORDS and len(word) > 1
+    ]
 
 
 def split_sentences(text):
-    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    return [s.strip() for s in sentences if len(s.strip()) > 20]
+    text = re.sub(r"\s+", " ", text)
+
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+
+    return [
+        sentence.strip()
+        for sentence in sentences
+        if len(sentence.strip()) > 15
+    ]
 
 
-# =====================================
-# PDF EXTRACTION
-# =====================================
+# ---------------- IMPROVED QUESTION ANSWERING ----------------
 
-def extract_pdf(uploaded_file):
-
-    pdf_bytes = uploaded_file.getvalue()
-
-    reader = PdfReader(io.BytesIO(pdf_bytes))
-
-    pages_text = []
-
-    for number, page in enumerate(reader.pages, start=1):
-
-        text = page.extract_text() or ""
-
-        if text.strip():
-            pages_text.append(
-                f"PAGE {number}\n{text}"
-            )
-
-    document_text = "\n\n".join(pages_text)
+def answer_question(question, document_text):
 
     if not document_text.strip():
-        raise ValueError(
-            "No readable text found. The PDF may be scanned."
-        )
+        return "Please upload a PDF document first."
 
-    return document_text, len(reader.pages)
-
-
-# =====================================
-# QUESTION ANSWERING
-# =====================================
-
-def ask_question(question, document_text):
-
-    sentences = split_sentences(document_text)
-
-    question_words = set(tokenize(question))
+    question_words = tokenize(question)
 
     if not question_words:
         return "Please enter a meaningful question."
 
-    scored_sentences = []
-
-    for sentence in sentences:
-
-        sentence_words = set(tokenize(sentence))
-
-        common_words = question_words.intersection(sentence_words)
-
-        if common_words:
-
-            score = len(common_words) / len(question_words)
-
-            scored_sentences.append((score, sentence))
-
-    scored_sentences.sort(
-        key=lambda x: x[0],
-        reverse=True
-    )
-
-    if not scored_sentences:
-        return (
-            "The answer is not available in the uploaded document."
-        )
-
-    best_answers = [
-        sentence
-        for score, sentence in scored_sentences[:3]
-        if score > 0
-    ]
-
-    return " ".join(best_answers)
-
-
-# =====================================
-# DOCUMENT SUMMARY
-# =====================================
-
-def generate_summary(document_text):
-
     sentences = split_sentences(document_text)
 
     if not sentences:
-        return "No readable sentences found in the document."
-
-    words = tokenize(document_text)
-
-    word_frequency = Counter(words)
+        return "No readable text was found in the PDF."
 
     scored_sentences = []
 
     for index, sentence in enumerate(sentences):
 
         sentence_words = tokenize(sentence)
+        sentence_set = set(sentence_words)
+
+        score = 0
+
+        # Match important question words
+        for word in question_words:
+
+            if word in sentence_set:
+                score += 3
+
+            # Partial word matching
+            elif any(
+                len(word) > 4 and
+                len(existing) > 4 and
+                (word.startswith(existing[:5]) or
+                 existing.startswith(word[:5]))
+                for existing in sentence_set
+            ):
+                score += 1
+
+        # Give extra score for exact phrase matches
+        if question.lower().rstrip("?") in sentence.lower():
+            score += 5
+
+        # Give extra score to sentences containing key terms
+        if score > 0:
+            scored_sentences.append((score, index, sentence))
+
+    if not scored_sentences:
+        return (
+            "Sorry, the answer was not found in the uploaded PDF. "
+            "Try asking the question using different keywords."
+        )
+
+    # Sort sentences by relevance
+    scored_sentences.sort(
+        key=lambda item: item[0],
+        reverse=True
+    )
+
+    # Select the best matching sentences
+    selected = scored_sentences[:3]
+
+    # Keep the original document order
+    selected.sort(key=lambda item: item[1])
+
+    answer = " ".join(
+        sentence for score, index, sentence in selected
+    )
+
+    return answer
+
+
+# ---------------- DOCUMENT SUMMARY ----------------
+
+def generate_summary(text, number_of_sentences=5):
+
+    sentences = split_sentences(text)
+
+    if not sentences:
+        return "No text available to summarize."
+
+    if len(sentences) <= number_of_sentences:
+        return " ".join(sentences)
+
+    words = tokenize(text)
+    word_frequency = Counter(words)
+
+    sentence_scores = []
+
+    for index, sentence in enumerate(sentences):
+
+        sentence_words = tokenize(sentence)
+
+        if not sentence_words:
+            continue
 
         score = sum(
             word_frequency[word]
             for word in sentence_words
-        )
+        ) / len(sentence_words)
 
-        if sentence_words:
-            score = score / len(sentence_words)
+        sentence_scores.append((score, index, sentence))
 
-        scored_sentences.append((score, index, sentence))
-
-    scored_sentences.sort(
-        key=lambda x: x[0],
+    best_sentences = sorted(
+        sentence_scores,
+        key=lambda item: item[0],
         reverse=True
+    )[:number_of_sentences]
+
+    best_sentences.sort(key=lambda item: item[1])
+
+    return " ".join(
+        sentence for score, index, sentence in best_sentences
     )
 
-    top_sentences = sorted(
-        scored_sentences[:5],
-        key=lambda x: x[1]
-    )
 
-    summary = "\n\n".join(
-        sentence for score, index, sentence in top_sentences
-    )
+# ---------------- SIDEBAR NAVIGATION ----------------
 
-    return summary
-
-
-# =====================================
-# SIDEBAR
-# =====================================
-
-st.sidebar.markdown(
-    """
-    <h1 style='text-align:center;color:#C4B5FD;'>
-    📚 DocuGenius AI
-    </h1>
-    """,
-    unsafe_allow_html=True
-)
-
-st.sidebar.markdown("---")
-
-st.sidebar.subheader("📂 Upload PDF")
-
-uploaded_file = st.sidebar.file_uploader(
-    "Choose your PDF document",
-    type=["pdf"]
-)
-
-
-# =====================================
-# PROCESS PDF
-# =====================================
-
-if uploaded_file is not None:
-
-    signature = (
-        uploaded_file.name,
-        uploaded_file.size
-    )
-
-    if st.session_state.file_signature != signature:
-
-        try:
-
-            with st.spinner("Reading PDF document..."):
-
-                text, pages = extract_pdf(uploaded_file)
-
-                st.session_state.document_text = text
-                st.session_state.document_name = uploaded_file.name
-                st.session_state.page_count = pages
-                st.session_state.file_signature = signature
-
-                st.session_state.chat_history = []
-                st.session_state.summary = ""
-
-            st.sidebar.success("PDF uploaded successfully!")
-
-        except Exception as error:
-
-            st.sidebar.error(str(error))
-
-
-# =====================================
-# NAVIGATION
-# =====================================
+st.sidebar.title("📘 DocuGenius AI")
 
 st.sidebar.markdown("---")
 
 page = st.sidebar.radio(
     "Navigation",
     [
-        "🏠 Dashboard",
-        "💬 Document Q&A",
-        "📝 Document Summary",
-        "📖 Document Reader",
-        "ℹ️ About Project"
+        "Dashboard",
+        "Document Q&A",
+        "Document Summary",
+        "Document Reader",
+        "About Project"
     ]
 )
 
+st.sidebar.markdown("---")
+st.sidebar.info("Your PDF processing is performed locally.")
 
-# =====================================
-# DASHBOARD
-# =====================================
 
-if page == "🏠 Dashboard":
+# ---------------- DASHBOARD ----------------
 
-    st.markdown(
-        '<div class="title">📚 DocuGenius AI</div>',
-        unsafe_allow_html=True
-    )
+if page == "Dashboard":
 
-    st.markdown(
-        '<div class="subtitle">'
-        'Intelligent Document Question Answering System'
-        '</div>',
-        unsafe_allow_html=True
-    )
+    st.title("📘 DocuGenius AI")
+    st.subheader("Your Smart PDF Assistant")
 
-    st.write("")
-
-    st.markdown("## ✨ Welcome!")
-
-    st.write(
-        "Upload your PDF document and ask questions. "
-        "DocuGenius AI helps you understand your document."
-    )
+    st.markdown("""
+    <div class="card">
+        <h2>Welcome to DocuGenius AI!</h2>
+        <p>
+        Upload your PDF documents, ask questions,
+        generate summaries and read document content
+        easily with this application.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
-
         st.markdown("""
         <div class="card">
-        <h3>📄 PDF Upload</h3>
-        <p>Upload PDF documents and extract text.</p>
+            <h3>📄 PDF Upload</h3>
+            <p>Upload and extract PDF document text.</p>
         </div>
         """, unsafe_allow_html=True)
 
     with col2:
-
         st.markdown("""
         <div class="card">
-        <h3>🤖 Document Q&A</h3>
-        <p>Ask questions and find relevant answers.</p>
+            <h3>❓ Document Q&A</h3>
+            <p>Ask questions and find answers in your PDF.</p>
         </div>
         """, unsafe_allow_html=True)
 
     with col3:
-
         st.markdown("""
         <div class="card">
-        <h3>📝 Summary</h3>
-        <p>Generate automatic document summaries.</p>
+            <h3>📝 Summary</h3>
+            <p>Generate a short summary of your document.</p>
         </div>
         """, unsafe_allow_html=True)
 
-    st.markdown("---")
+    st.markdown("### Upload Your PDF")
 
-    if st.session_state.document_text:
+    uploaded_file = st.file_uploader(
+        "Choose a PDF file",
+        type=["pdf"]
+    )
 
-        st.success("PDF is ready!")
+    if uploaded_file is not None:
 
-        col1, col2 = st.columns(2)
+        if st.button("Upload and Process PDF"):
 
-        col1.metric(
-            "Total Pages",
-            st.session_state.page_count
+            extracted_text = extract_pdf_text(uploaded_file)
+
+            if extracted_text:
+
+                st.session_state.pdf_text = extracted_text
+                st.session_state.file_name = uploaded_file.name
+
+                st.success("PDF uploaded successfully!")
+
+                st.info(
+                    f"File: {uploaded_file.name} | "
+                    f"Characters extracted: {len(extracted_text)}"
+                )
+
+            else:
+                st.error(
+                    "No readable text found. "
+                    "The PDF may be scanned or image-based."
+                )
+
+    if st.session_state.pdf_text:
+        st.success(
+            f"Currently loaded: {st.session_state.file_name}"
         )
 
-        col2.metric(
-            "Extracted Characters",
-            f"{len(st.session_state.document_text):,}"
+
+# ---------------- DOCUMENT Q&A ----------------
+
+elif page == "Document Q&A":
+
+    st.title("❓ Document Question & Answer")
+
+    if not st.session_state.pdf_text:
+
+        st.warning(
+            "Please upload a PDF from the Dashboard first."
         )
-
-        st.info(
-            f"Document: {st.session_state.document_name}"
-        )
-
-    else:
-
-        st.info("Upload a PDF from the sidebar to get started.")
-
-
-# =====================================
-# DOCUMENT Q&A
-# =====================================
-
-elif page == "💬 Document Q&A":
-
-    st.title("💬 Ask Your Document")
-
-    if not st.session_state.document_text:
-
-        st.warning("Please upload a PDF first.")
 
     else:
 
         st.success(
-            f"Loaded: {st.session_state.document_name}"
+            f"Document loaded: {st.session_state.file_name}"
         )
 
-        with st.form("question_form"):
+        question = st.text_input(
+            "Enter your question",
+            placeholder="Example: What is supervised learning?"
+        )
 
-            question = st.text_input(
-                "Your Question",
-                placeholder="What is the main purpose of this document?"
-            )
+        if st.button("Get Answer"):
 
-            submit = st.form_submit_button("🚀 Ask Question")
+            if question.strip():
 
-        if submit:
-
-            if not question.strip():
-
-                st.warning("Please enter a question.")
-
-            else:
-
-                answer = ask_question(
+                answer = answer_question(
                     question,
-                    st.session_state.document_text
+                    st.session_state.pdf_text
                 )
-
-                st.session_state.chat_history.append({
-                    "question": question,
-                    "answer": answer
-                })
-
-        st.markdown("---")
-
-        st.subheader("🤖 Document Answer")
-
-        if st.session_state.chat_history:
-
-            for item in reversed(st.session_state.chat_history):
 
                 st.markdown(
-                    f"**Question:** {item['question']}"
+                    f"""
+                    <div class="answer-box">
+                        <h3>Answer</h3>
+                        {answer}
+                    </div>
+                    """,
+                    unsafe_allow_html=True
                 )
 
-                st.success(item["answer"])
+                st.session_state.history.append(
+                    {
+                        "question": question,
+                        "answer": answer
+                    }
+                )
 
-                st.markdown("---")
+            else:
+                st.warning("Please enter a question.")
 
-        else:
+        if st.session_state.history:
 
-            st.info("Your answer will appear here.")
+            st.markdown("### Question History")
 
-        if st.button("🗑️ Clear Answer History"):
+            for item in reversed(st.session_state.history):
 
-            st.session_state.chat_history = []
+                with st.expander(item["question"]):
+                    st.write(item["answer"])
 
-            st.rerun()
 
+# ---------------- DOCUMENT SUMMARY ----------------
 
-# =====================================
-# DOCUMENT SUMMARY
-# =====================================
-
-elif page == "📝 Document Summary":
+elif page == "Document Summary":
 
     st.title("📝 Document Summary")
 
-    if not st.session_state.document_text:
+    if not st.session_state.pdf_text:
 
-        st.warning("Please upload a PDF first.")
+        st.warning(
+            "Please upload a PDF from the Dashboard first."
+        )
 
     else:
 
-        st.success(
-            f"Document: {st.session_state.document_name}"
+        st.success("Document is ready for summarization.")
+
+        number = st.slider(
+            "Number of sentences in summary",
+            min_value=3,
+            max_value=15,
+            value=5
         )
 
-        if st.button("✨ Generate Summary"):
+        if st.button("Generate Summary"):
 
-            with st.spinner("Generating summary..."):
+            summary = generate_summary(
+                st.session_state.pdf_text,
+                number
+            )
 
-                st.session_state.summary = generate_summary(
-                    st.session_state.document_text
-                )
-
-        if st.session_state.summary:
-
-            st.markdown("---")
-
-            st.subheader("📌 Document Summary")
-
-            st.write(st.session_state.summary)
-
-            st.download_button(
-                "⬇️ Download Summary",
-                data=st.session_state.summary,
-                file_name="document_summary.txt",
-                mime="text/plain"
+            st.markdown(
+                f"""
+                <div class="answer-box">
+                    <h3>Document Summary</h3>
+                    {summary}
+                </div>
+                """,
+                unsafe_allow_html=True
             )
 
 
-# =====================================
-# DOCUMENT READER
-# =====================================
+# ---------------- DOCUMENT READER ----------------
 
-elif page == "📖 Document Reader":
+elif page == "Document Reader":
 
     st.title("📖 Document Reader")
 
-    if not st.session_state.document_text:
+    if not st.session_state.pdf_text:
 
-        st.warning("Please upload a PDF first.")
+        st.warning(
+            "Please upload a PDF from the Dashboard first."
+        )
 
     else:
 
         st.success(
-            f"Reading: {st.session_state.document_name}"
-        )
-
-        st.metric(
-            "Total Pages",
-            st.session_state.page_count
+            f"Reading: {st.session_state.file_name}"
         )
 
         st.text_area(
-            "Extracted Document Text",
-            value=st.session_state.document_text,
+            "Extracted PDF Content",
+            value=st.session_state.pdf_text,
             height=500
         )
 
 
-# =====================================
-# ABOUT PROJECT
-# =====================================
+# ---------------- ABOUT PROJECT ----------------
 
-elif page == "ℹ️ About Project":
+elif page == "About Project":
 
     st.title("ℹ️ About DocuGenius AI")
 
     st.markdown("""
-    ## 📚 DocuGenius AI
+    <div class="card">
+        <h2>Project Introduction</h2>
+        <p>
+        DocuGenius AI is a PDF assistant application developed
+        using Python and Streamlit. It allows users to upload
+        PDF files, extract text, ask questions, and generate
+        short summaries.
+        </p>
 
-    **Intelligent Document Question Answering System**
+        <h3>Main Features</h3>
+        <ul>
+            <li>PDF document upload</li>
+            <li>Text extraction from PDF</li>
+            <li>Question answering using keyword matching</li>
+            <li>Document summarization</li>
+            <li>Document reading</li>
+            <li>Question history</li>
+        </ul>
 
-    DocuGenius AI is a document processing application
-    that helps users understand PDF documents.
+        <h3>Technology Used</h3>
+        <ul>
+            <li>Python</li>
+            <li>Streamlit</li>
+            <li>PyPDF</li>
+            <li>Regular Expressions</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
 
-    ### ✨ Main Features
-
-    - PDF Upload
-    - PDF Text Extraction
-    - Document Question Answering
-    - Relevant Sentence Matching
-    - Automatic Extractive Summary
-    - Document Reader
-    - Answer History
-    - Summary Download
-
-    ### 💻 Technologies Used
-
-    - Python
-    - Streamlit
-    - PyPDF
-    - Python Text Processing
-
-    ### 🎓 Project Category
-
-    Document Processing Application
-    """)
+    st.caption(
+        "Note: This version uses local text processing, "
+        "not a generative AI model. Its answers depend on "
+        "the readable text extracted from the uploaded PDF."
+    )
 
 
-# =====================================
-# FOOTER
-# =====================================
+# ---------------- FOOTER ----------------
 
-st.sidebar.markdown("---")
+st.markdown("---")
 
-st.sidebar.caption(
-    "Made with ❤️ using Python and Streamlit"
+st.markdown(
+    "<center>© 2026 DocuGenius AI | PDF Assistant</center>",
+    unsafe_allow_html=True
 )
