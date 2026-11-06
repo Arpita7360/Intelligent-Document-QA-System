@@ -1,8 +1,9 @@
 
 import streamlit as st
 import io
+import re
+from collections import Counter
 from pypdf import PdfReader
-from google import genai
 
 # =====================================
 # PAGE CONFIGURATION
@@ -15,39 +16,31 @@ st.set_page_config(
 )
 
 # =====================================
-# PURPLE & DARK BLUE DESIGN
+# PURPLE AND DARK BLUE THEME
 # =====================================
 
 st.markdown("""
 <style>
 
-/* Main background */
 .stApp {
     background: linear-gradient(135deg, #10172F, #172554, #241447);
-    color: #FFFFFF;
+    color: white;
 }
 
-/* Main text */
-.stApp h1,
-.stApp h2,
-.stApp h3,
-.stApp h4,
-.stApp p,
-.stApp label,
+.stApp h1, .stApp h2, .stApp h3,
+.stApp h4, .stApp p, .stApp label,
 .stApp li {
-    color: #FFFFFF !important;
+    color: white !important;
 }
 
-/* Sidebar */
 [data-testid="stSidebar"] {
     background: linear-gradient(180deg, #3B0764, #172554);
 }
 
 [data-testid="stSidebar"] * {
-    color: #FFFFFF !important;
+    color: white !important;
 }
 
-/* Main title */
 .title {
     text-align: center;
     color: #C4B5FD !important;
@@ -55,14 +48,12 @@ st.markdown("""
     font-weight: 800;
 }
 
-/* Subtitle */
 .subtitle {
     text-align: center;
     color: #BFDBFE !important;
     font-size: 19px;
 }
 
-/* Cards */
 .card {
     background: linear-gradient(135deg, #31245D, #1E3260);
     padding: 25px;
@@ -77,52 +68,33 @@ st.markdown("""
 }
 
 .card p {
-    color: #FFFFFF !important;
+    color: white !important;
 }
 
-/* Buttons */
 .stButton > button,
 .stFormSubmitButton > button {
     background: linear-gradient(90deg, #7C3AED, #2563EB);
-    color: #FFFFFF !important;
+    color: white !important;
     border: none;
     border-radius: 10px;
-    padding: 8px 20px;
     font-weight: bold;
 }
 
-.stButton > button:hover,
-.stFormSubmitButton > button:hover {
-    background: linear-gradient(90deg, #9333EA, #3B82F6);
-    color: white !important;
-    border: 1px solid #C4B5FD;
-}
-
-/* Text input */
 .stTextInput input,
 .stTextArea textarea {
-    background-color: #FFFFFF !important;
+    background-color: white !important;
     color: #111827 !important;
     border: 2px solid #8B5CF6 !important;
     border-radius: 8px;
 }
 
-/* Input placeholder */
-.stTextInput input::placeholder,
-.stTextArea textarea::placeholder {
-    color: #6B7280 !important;
-}
-
-/* File uploader */
 [data-testid="stFileUploader"] {
     background: #26345C;
     border: 1px solid #8064D6;
     border-radius: 12px;
     padding: 12px;
-    color: white !important;
 }
 
-/* Metrics */
 [data-testid="stMetric"] {
     background: #292653;
     padding: 18px;
@@ -132,38 +104,11 @@ st.markdown("""
 
 [data-testid="stMetricValue"],
 [data-testid="stMetricLabel"] {
-    color: #FFFFFF !important;
-}
-
-/* Alerts */
-[data-testid="stAlert"] {
-    border-radius: 10px;
-}
-
-/* Radio buttons */
-.stRadio label {
     color: white !important;
 }
 
-/* Select boxes */
-.stSelectbox div[data-baseweb="select"] {
-    background-color: white;
-    color: #111827;
-}
-
-/* Horizontal line */
 hr {
     border-color: #6D5BA6;
-}
-
-/* Spinner */
-.stSpinner {
-    color: #C4B5FD !important;
-}
-
-/* Links */
-.stApp a {
-    color: #A5B4FC !important;
 }
 
 </style>
@@ -189,25 +134,28 @@ for key, value in defaults.items():
 
 
 # =====================================
-# GEMINI AI FUNCTION
+# TEXT PROCESSING
 # =====================================
 
-def call_gemini(prompt, api_key):
+STOPWORDS = {
+    "the", "is", "a", "an", "and", "or", "of", "to",
+    "in", "on", "for", "with", "what", "which", "who",
+    "when", "where", "why", "how", "are", "was", "were",
+    "be", "been", "being", "this", "that", "these",
+    "those", "it", "its", "as", "at", "by", "from",
+    "do", "does", "did", "can", "could", "would",
+    "should", "about", "explain", "tell", "me"
+}
 
-    if not api_key.strip():
-        raise ValueError("Please enter your Gemini API Key.")
 
-    client = genai.Client(api_key=api_key.strip())
+def tokenize(text):
+    words = re.findall(r'\b[a-zA-Z0-9]+\b', text.lower())
+    return [word for word in words if word not in STOPWORDS]
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt
-    )
 
-    if not response.text:
-        raise Exception("AI did not return an answer.")
-
-    return response.text.strip()
+def split_sentences(text):
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    return [s.strip() for s in sentences if len(s.strip()) > 20]
 
 
 # =====================================
@@ -242,61 +190,97 @@ def extract_pdf(uploaded_file):
 
 
 # =====================================
-# QUESTION ANSWERING FUNCTION
+# QUESTION ANSWERING
 # =====================================
 
-def ask_question(question, document_text, api_key):
+def ask_question(question, document_text):
 
-    prompt = f"""
-You are DocuGenius AI, an intelligent PDF assistant.
+    sentences = split_sentences(document_text)
 
-Answer the user's question using ONLY the uploaded document.
+    question_words = set(tokenize(question))
 
-Instructions:
-1. Give only ONE complete and direct answer.
-2. Use simple and easy English.
-3. Do not show multiple results or scores.
-4. Do not repeat the question.
-5. Give a short paragraph unless more detail is necessary.
-6. Do not invent information.
-7. If the answer is not available in the document,
-clearly say:
-"The answer is not available in the uploaded document."
+    if not question_words:
+        return "Please enter a meaningful question."
 
-UPLOADED DOCUMENT:
-{document_text[:30000]}
+    scored_sentences = []
 
-USER QUESTION:
-{question}
+    for sentence in sentences:
 
-Now provide one final answer:
-"""
+        sentence_words = set(tokenize(sentence))
 
-    return call_gemini(prompt, api_key)
+        common_words = question_words.intersection(sentence_words)
+
+        if common_words:
+
+            score = len(common_words) / len(question_words)
+
+            scored_sentences.append((score, sentence))
+
+    scored_sentences.sort(
+        key=lambda x: x[0],
+        reverse=True
+    )
+
+    if not scored_sentences:
+        return (
+            "The answer is not available in the uploaded document."
+        )
+
+    best_answers = [
+        sentence
+        for score, sentence in scored_sentences[:3]
+        if score > 0
+    ]
+
+    return " ".join(best_answers)
 
 
 # =====================================
-# SUMMARY FUNCTION
+# DOCUMENT SUMMARY
 # =====================================
 
-def generate_summary(document_text, api_key):
+def generate_summary(document_text):
 
-    prompt = f"""
-Summarize the uploaded document in simple English.
+    sentences = split_sentences(document_text)
 
-Include:
-1. Introduction
-2. Main Purpose
-3. Important Points
-4. Conclusion
+    if not sentences:
+        return "No readable sentences found in the document."
 
-Use clear headings and short explanations.
+    words = tokenize(document_text)
 
-DOCUMENT:
-{document_text[:30000]}
-"""
+    word_frequency = Counter(words)
 
-    return call_gemini(prompt, api_key)
+    scored_sentences = []
+
+    for index, sentence in enumerate(sentences):
+
+        sentence_words = tokenize(sentence)
+
+        score = sum(
+            word_frequency[word]
+            for word in sentence_words
+        )
+
+        if sentence_words:
+            score = score / len(sentence_words)
+
+        scored_sentences.append((score, index, sentence))
+
+    scored_sentences.sort(
+        key=lambda x: x[0],
+        reverse=True
+    )
+
+    top_sentences = sorted(
+        scored_sentences[:5],
+        key=lambda x: x[1]
+    )
+
+    summary = "\n\n".join(
+        sentence for score, index, sentence in top_sentences
+    )
+
+    return summary
 
 
 # =====================================
@@ -305,7 +289,7 @@ DOCUMENT:
 
 st.sidebar.markdown(
     """
-    <h1 style='text-align:center; color:#C4B5FD;'>
+    <h1 style='text-align:center;color:#C4B5FD;'>
     📚 DocuGenius AI
     </h1>
     """,
@@ -314,20 +298,10 @@ st.sidebar.markdown(
 
 st.sidebar.markdown("---")
 
-st.sidebar.subheader("🔐 Gemini API Key")
-
-api_key = st.sidebar.text_input(
-    "Enter Gemini API Key",
-    type="password",
-    placeholder="Paste your API key"
-)
-
-st.sidebar.markdown("---")
-
 st.sidebar.subheader("📂 Upload PDF")
 
 uploaded_file = st.sidebar.file_uploader(
-    "Choose PDF",
+    "Choose your PDF document",
     type=["pdf"]
 )
 
@@ -408,7 +382,7 @@ if page == "🏠 Dashboard":
 
     st.write(
         "Upload your PDF document and ask questions. "
-        "Gemini AI will help you understand your document."
+        "DocuGenius AI helps you understand your document."
     )
 
     col1, col2, col3 = st.columns(3)
@@ -426,8 +400,8 @@ if page == "🏠 Dashboard":
 
         st.markdown("""
         <div class="card">
-        <h3>🤖 AI Answers</h3>
-        <p>Ask questions and receive one complete answer.</p>
+        <h3>🤖 Document Q&A</h3>
+        <p>Ask questions and find relevant answers.</p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -464,9 +438,7 @@ if page == "🏠 Dashboard":
 
     else:
 
-        st.info(
-            "Upload a PDF from the sidebar to get started."
-        )
+        st.info("Upload a PDF from the sidebar to get started.")
 
 
 # =====================================
@@ -494,7 +466,7 @@ elif page == "💬 Document Q&A":
                 placeholder="What is the main purpose of this document?"
             )
 
-            submit = st.form_submit_button("🚀 Ask AI")
+            submit = st.form_submit_button("🚀 Ask Question")
 
         if submit:
 
@@ -502,44 +474,33 @@ elif page == "💬 Document Q&A":
 
                 st.warning("Please enter a question.")
 
-            elif not api_key.strip():
-
-                st.error("Please enter your Gemini API Key.")
-
             else:
 
-                try:
+                answer = ask_question(
+                    question,
+                    st.session_state.document_text
+                )
 
-                    with st.spinner("🤖 Generating your answer..."):
-
-                        answer = ask_question(
-                            question,
-                            st.session_state.document_text,
-                            api_key
-                        )
-
-                    st.session_state.chat_history.append({
-                        "question": question,
-                        "answer": answer
-                    })
-
-                except Exception as error:
-
-                    st.error(str(error))
+                st.session_state.chat_history.append({
+                    "question": question,
+                    "answer": answer
+                })
 
         st.markdown("---")
 
-        st.subheader("🤖 AI Answer")
+        st.subheader("🤖 Document Answer")
 
         if st.session_state.chat_history:
 
-            latest = st.session_state.chat_history[-1]
+            for item in reversed(st.session_state.chat_history):
 
-            st.markdown(
-                f"**Question:** {latest['question']}"
-            )
+                st.markdown(
+                    f"**Question:** {item['question']}"
+                )
 
-            st.success(latest["answer"])
+                st.success(item["answer"])
+
+                st.markdown("---")
 
         else:
 
@@ -572,34 +533,26 @@ elif page == "📝 Document Summary":
 
         if st.button("✨ Generate Summary"):
 
-            if not api_key.strip():
+            with st.spinner("Generating summary..."):
 
-                st.error("Please enter your Gemini API Key.")
-
-            else:
-
-                try:
-
-                    with st.spinner("Generating summary..."):
-
-                        summary = generate_summary(
-                            st.session_state.document_text,
-                            api_key
-                        )
-
-                    st.session_state.summary = summary
-
-                except Exception as error:
-
-                    st.error(str(error))
+                st.session_state.summary = generate_summary(
+                    st.session_state.document_text
+                )
 
         if st.session_state.summary:
 
             st.markdown("---")
 
-            st.subheader("📌 AI Summary")
+            st.subheader("📌 Document Summary")
 
-            st.markdown(st.session_state.summary)
+            st.write(st.session_state.summary)
+
+            st.download_button(
+                "⬇️ Download Summary",
+                data=st.session_state.summary,
+                file_name="document_summary.txt",
+                mime="text/plain"
+            )
 
 
 # =====================================
@@ -645,29 +598,30 @@ elif page == "ℹ️ About Project":
 
     **Intelligent Document Question Answering System**
 
-    DocuGenius AI is an AI-powered application
+    DocuGenius AI is a document processing application
     that helps users understand PDF documents.
 
     ### ✨ Main Features
 
-    - 📄 PDF Upload
-    - 📖 PDF Text Extraction
-    - 🤖 AI Question Answering
-    - 💬 One Complete Answer
-    - 📝 Automatic PDF Summary
-    - 📚 Document Reader
-    - 🗂️ Answer History
+    - PDF Upload
+    - PDF Text Extraction
+    - Document Question Answering
+    - Relevant Sentence Matching
+    - Automatic Extractive Summary
+    - Document Reader
+    - Answer History
+    - Summary Download
 
-    ### 💻 Technologies
+    ### 💻 Technologies Used
 
     - Python
     - Streamlit
-    - Google Gemini API
     - PyPDF
+    - Python Text Processing
 
     ### 🎓 Project Category
 
-    Generative Artificial Intelligence
+    Document Processing Application
     """)
 
 
@@ -678,5 +632,5 @@ elif page == "ℹ️ About Project":
 st.sidebar.markdown("---")
 
 st.sidebar.caption(
-    "Made with ❤️ using Python and Gemini AI"
+    "Made with ❤️ using Python and Streamlit"
 )
